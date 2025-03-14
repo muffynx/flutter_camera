@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'dart:io';
-import 'package:gal/gal.dart';
+import 'dart:html' as html;  //web support
+import 'package:image_gallery_saver/image_gallery_saver.dart'; //  mobile support
+import 'package:path_provider/path_provider.dart';
+import 'package:flutter/foundation.dart'; 
+
 
 List<CameraDescription> cameras = [];
 
 Future<void> main() async {
-  // Ensure that plugin services are initialized
   WidgetsFlutterBinding.ensureInitialized();
-
-  // Get available cameras
   try {
     cameras = await availableCameras();
   } on CameraException catch (e) {
@@ -43,7 +44,6 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // Store a list of images instead of just the last one
   final List<File> _capturedImages = [];
 
   @override
@@ -70,7 +70,6 @@ class _HomePageState extends State<HomePage> {
                 itemBuilder: (context, index) {
                   return GestureDetector(
                     onTap: () {
-                      // Show full-screen image when tapped
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -82,10 +81,7 @@ class _HomePageState extends State<HomePage> {
                     },
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.file(
-                        _capturedImages[index],
-                        fit: BoxFit.cover,
-                      ),
+                      child: _buildImageWidget(_capturedImages[index]),
                     ),
                   );
                 },
@@ -111,6 +107,52 @@ class _HomePageState extends State<HomePage> {
       ),
     );
   }
+
+  Widget _buildImageWidget(File file) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: Offset(0, 4), 
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: kIsWeb
+                ? Image.memory(
+                    file.readAsBytesSync(), 
+                    fit: BoxFit.cover,
+                    width: 200,
+                    height: 200,
+                  )
+                : Image.file(
+                    file,
+                    fit: BoxFit.cover,
+                    width: 200,
+                    height: 200,
+                  ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Polaroid',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class FullScreenImageView extends StatelessWidget {
@@ -126,36 +168,17 @@ class FullScreenImageView extends StatelessWidget {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: const Text('Photo View'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-        ],
       ),
       body: Center(
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white, // กำหนดกรอบของภาพเป็นสีขาว
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.2), // เงาของกรอบ
-                spreadRadius: 5,
-                blurRadius: 0,
-                offset: Offset(0, 3), // กำหนดทิศทางเงา
+        child: kIsWeb
+            ? Image.memory(
+                File(imagePath).readAsBytesSync(),
+                fit: BoxFit.contain,
+              )
+            : Image.file(
+                File(imagePath),
+                fit: BoxFit.contain,
               ),
-            ],
-          ),
-          padding: const EdgeInsets.only(
-              left: 10,
-              right: 10,
-              top: 20,
-              bottom: 40), // เพิ่มระยะห่างระหว่างกรอบกับภาพ
-          child: Image.file(
-            File(imagePath),
-            fit: BoxFit.contain,
-          ),
-        ),
       ),
     );
   }
@@ -178,7 +201,6 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void initState() {
     super.initState();
-    // Initialize the camera controller
     _initCamera(widget.cameras[0]);
   }
 
@@ -187,16 +209,47 @@ class _CameraScreenState extends State<CameraScreen> {
       camera,
       ResolutionPreset.high,
     );
-
     _initializeControllerFuture = _controller.initialize();
     setState(() {});
   }
 
   @override
   void dispose() {
-    // Dispose of the controller when the widget is disposed
     _controller.dispose();
     super.dispose();
+  }
+
+
+  Future<void> _saveImageToGallery(String imagePath) async {
+    if (!kIsWeb) {
+      try {
+        final result = await ImageGallerySaver.saveFile(imagePath);
+        print(result);
+      } catch (e) {
+        print('Error saving image to gallery: $e');
+      }
+    } else {
+      // For web, create a download link
+      final byteData = await File(imagePath).readAsBytes();
+      final buffer = html.Blob([byteData]);
+      final url = html.Url.createObjectUrlFromBlob(buffer);
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute('download', 'image.jpg')
+        ..click();
+      html.Url.revokeObjectUrl(url);
+    }
+  }
+
+  Future<void> _saveImageToDirectory(String imagePath) async {
+    if (!kIsWeb) {
+      try {
+        final directory = await getExternalStorageDirectory();
+        final newFile = await File(imagePath).copy('${directory?.path}/image.jpg');
+        print('File saved at: ${newFile.path}');
+      } catch (e) {
+        print('Error saving image to directory: $e');
+      }
+    }
   }
 
   @override
@@ -211,16 +264,12 @@ class _CameraScreenState extends State<CameraScreen> {
         future: _initializeControllerFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.done) {
-            // If the Future is complete, display the preview
             return Column(
               children: [
-                Expanded(
-                  child: CameraPreview(_controller),
-                ),
+                Expanded(child: CameraPreview(_controller)),
               ],
             );
           } else {
-            // Otherwise, display a loading indicator
             return const Center(child: CircularProgressIndicator());
           }
         },
@@ -228,7 +277,6 @@ class _CameraScreenState extends State<CameraScreen> {
       floatingActionButton: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          // Switch camera button
           FloatingActionButton(
             heroTag: 'switchCamera',
             onPressed: () {
@@ -242,34 +290,19 @@ class _CameraScreenState extends State<CameraScreen> {
             },
             child: const Icon(Icons.flip_camera_ios),
           ),
-          // Take picture button
           FloatingActionButton(
             heroTag: 'takePicture',
             onPressed: () async {
               try {
-                // Ensure that the camera is initialized
                 await _initializeControllerFuture;
-
-                // Take the picture
                 final image = await _controller.takePicture();
-
-                // Save the image to the gallery using gal package
-                await Gal.putImage(image.path);
-
-                if (!mounted) return;
-
-                // Show a snackbar
+                await _saveImageToGallery(image.path);
+                await _saveImageToDirectory(image.path);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Picture saved to gallery!'),
-                    duration: Duration(seconds: 2),
-                  ),
+                  const SnackBar(content: Text('Picture saved to gallery!')),
                 );
-
-                // Return to home screen with the image
                 Navigator.pop(context, image);
               } catch (e) {
-                // If an error occurs, log the error to the console
                 print('Error taking picture: $e');
               }
             },
